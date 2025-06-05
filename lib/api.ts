@@ -1,78 +1,13 @@
 // Mock API implementation - replace with real API calls
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
+const API_BASE_URL = {
+  orders: "http://localhost:8000/api/v1",
+  auth: "http://localhost:8001/api/v1",
+  products: "http://localhost:8002/api/v1",
+}
 
 // Simulate API delay
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// Mock data
-const mockUsers = [
-  { id: "1", email: "admin@example.com", password: "admin123", name: "Admin User", role: "admin" as const },
-  { id: "2", email: "user@example.com", password: "user123", name: "John Doe", role: "user" as const },
-]
-
-const mockProducts = [
-  {
-    id: "1",
-    name: "Wireless Headphones",
-    price: 7999,
-    description: "High-quality wireless headphones with noise cancellation",
-    image: "/placeholder.svg?height=300&width=300",
-    category: "Electronics",
-    stock: 50,
-    rating: 4.5,
-  },
-  {
-    id: "2",
-    name: "Smart Watch",
-    price: 15999,
-    description: "Feature-rich smartwatch with health tracking",
-    image: "/placeholder.svg?height=300&width=300",
-    category: "Electronics",
-    stock: 30,
-    rating: 4.3,
-  },
-  {
-    id: "3",
-    name: "Running Shoes",
-    price: 6399,
-    description: "Comfortable running shoes for daily exercise",
-    image: "/placeholder.svg?height=300&width=300",
-    category: "Sports",
-    stock: 100,
-    rating: 4.7,
-  },
-  {
-    id: "4",
-    name: "Coffee Maker",
-    price: 11999,
-    description: "Automatic coffee maker with programmable settings",
-    image: "/placeholder.svg?height=300&width=300",
-    category: "Home",
-    stock: 25,
-    rating: 4.2,
-  },
-]
-
-const mockOrders = [
-  {
-    id: "1",
-    userId: "2",
-    items: [{ productId: "1", quantity: 1, price: 7999 }],
-    total: 7999,
-    status: "delivered",
-    createdAt: "2024-01-15T10:00:00Z",
-    shippingAddress: "123 Main St, City, State 12345",
-  },
-  {
-    id: "2",
-    userId: "2",
-    items: [{ productId: "2", quantity: 1, price: 15999 }],
-    total: 15999,
-    status: "shipped",
-    createdAt: "2024-01-20T14:30:00Z",
-    shippingAddress: "123 Main St, City, State 12345",
-  },
-]
 
 interface LoginResponse {
   access_token: string;
@@ -87,7 +22,7 @@ interface LoginResponse {
 
 export const authApi = {
   async login(email: string, password: string): Promise<LoginResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/login`, {
+    const response = await fetch(`${API_BASE_URL.auth}/login`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -120,100 +55,190 @@ export const authApi = {
   },
 }
 
+// Define the product type based on the API response
+interface Category {
+  id: number;
+  name: string;
+  description: string;
+}
+
+interface Product {
+  id: number;
+  name: string;
+  description: string;
+  price: number;
+  stock: number;
+  category_id: number;
+  created_at: string;
+  updated_at: string;
+  category: Category;
+}
+
+interface ProductsResponse {
+  products: Product[];
+  total: number;
+  page: number;
+  totalPages: number;
+}
+
 export const productsApi = {
-  async getProducts(params?: { search?: string; category?: string; page?: number; limit?: number }) {
-    await delay(800)
-    let filteredProducts = [...mockProducts]
+  async getProducts(params?: { 
+    search?: string; 
+    category?: number;
+    page?: number; 
+    limit?: number 
+  }): Promise<ProductsResponse> {
+    // Set default values and validate
+    const page = Math.max(1, params?.page || 1);
+    const limit = Math.min(1000, Math.max(1, params?.limit || 10));
 
-    if (params?.search) {
-      filteredProducts = filteredProducts.filter(
-        (p) =>
-          p.name.toLowerCase().includes(params.search!.toLowerCase()) ||
-          p.description.toLowerCase().includes(params.search!.toLowerCase()),
-      )
-    }
+    const queryParams = new URLSearchParams();
+    if (params?.search) queryParams.append('search', params.search);
+    if (params?.category) queryParams.append('category_id', params.category.toString());
+    queryParams.append('page', page.toString());
+    queryParams.append('limit', limit.toString());
 
-    if (params?.category) {
-      filteredProducts = filteredProducts.filter((p) => p.category === params.category)
-    }
+    try {
+      const token = localStorage.getItem('auth_token');
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
 
-    const page = params?.page || 1
-    const limit = params?.limit || 10
-    const start = (page - 1) * limit
-    const end = start + limit
-
-    return {
-      products: filteredProducts.slice(start, end),
-      total: filteredProducts.length,
-      page,
-      totalPages: Math.ceil(filteredProducts.length / limit),
+      const response = await fetch(`${API_BASE_URL.products}/products?${queryParams.toString()}`, {
+        headers,
+      });
+      
+      if (response.status === 401) {
+        // Token expired or invalid
+        localStorage.removeItem('auth_token');
+        throw new Error('Session expired. Please login again.');
+      }
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to fetch products');
+      }
+      
+      return response.json();
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Failed to fetch products');
     }
   },
 
-  async getProduct(id: string) {
-    await delay(500)
-    const product = mockProducts.find((p) => p.id === id)
-    if (!product) {
-      throw new Error("Product not found")
+  async getProduct(id: string): Promise<Product> {
+    const response = await fetch(`${API_BASE_URL.products}/products/${id}`);
+    if (!response.ok) {
+      throw new Error('Product not found');
     }
-    return product
+    return response.json();
   },
 
-  async createProduct(product: Omit<(typeof mockProducts)[0], "id">) {
-    await delay(1000)
-    const newProduct = { ...product, id: Date.now().toString() }
-    mockProducts.push(newProduct)
-    return newProduct
+  // Admin operations remain the same but with corrected URLs
+  async createProduct(product: Omit<Product, 'id' | 'created_at' | 'updated_at' | 'category'>) {
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      throw new Error('Authentication required');
+    }
+
+    const response = await fetch(`${API_BASE_URL.products}/products`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(product),
+    });
+
+    if (response.status === 403) {
+      throw new Error('Admin access required');
+    }
+    if (!response.ok) {
+      throw new Error('Failed to create product');
+    }
+    return response.json();
   },
 
-  async updateProduct(id: string, updates: Partial<(typeof mockProducts)[0]>) {
-    await delay(1000)
-    const index = mockProducts.findIndex((p) => p.id === id)
-    if (index === -1) {
-      throw new Error("Product not found")
+  async updateProduct(id: string, updates: Partial<Omit<Product, 'id' | 'created_at' | 'updated_at' | 'category'>>) {
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      throw new Error('Authentication required');
     }
-    mockProducts[index] = { ...mockProducts[index], ...updates }
-    return mockProducts[index]
+
+    const response = await fetch(`${API_BASE_URL.products}/products/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(updates),
+    });
+
+    if (response.status === 403) {
+      throw new Error('Admin access required');
+    }
+    if (!response.ok) {
+      throw new Error('Failed to update product');
+    }
+    return response.json();
   },
 
   async deleteProduct(id: string) {
-    await delay(1000)
-    const index = mockProducts.findIndex((p) => p.id === id)
-    if (index === -1) {
-      throw new Error("Product not found")
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      throw new Error('Authentication required');
     }
-    mockProducts.splice(index, 1)
-    return { success: true }
-  },
-}
 
-export const ordersApi = {
-  async getOrders(userId?: string) {
-    await delay(800)
-    if (userId) {
-      return mockOrders.filter((o) => o.userId === userId)
-    }
-    return mockOrders
-  },
+    const response = await fetch(`${API_BASE_URL.products}/products/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
 
-  async createOrder(order: Omit<(typeof mockOrders)[0], "id" | "createdAt">) {
-    await delay(1000)
-    const newOrder = {
-      ...order,
-      id: Date.now().toString(),
-      createdAt: new Date().toISOString(),
+    if (response.status === 403) {
+      throw new Error('Admin access required');
     }
-    mockOrders.push(newOrder)
-    return newOrder
+    if (!response.ok) {
+      throw new Error('Failed to delete product');
+    }
+    return { success: true };
   },
+};
 
-  async updateOrderStatus(id: string, status: string) {
-    await delay(1000)
-    const index = mockOrders.findIndex((o) => o.id === id)
-    if (index === -1) {
-      throw new Error("Order not found")
-    }
-    mockOrders[index].status = status
-    return mockOrders[index]
-  },
-}
+// export const ordersApi = {
+//   async getOrders(userId?: string) {
+//     await delay(800)
+//     if (userId) {
+//       return mockOrders.filter((o) => o.userId === userId)
+//     }
+//     return mockOrders
+//   },
+
+//   async createOrder(order: Omit<(typeof mockOrders)[0], "id" | "createdAt">) {
+//     await delay(1000)
+//     const newOrder = {
+//       ...order,
+//       id: Date.now().toString(),
+//       createdAt: new Date().toISOString(),
+//     }
+//     mockOrders.push(newOrder)
+//     return newOrder
+//   },
+
+//   async updateOrderStatus(id: string, status: string) {
+//     await delay(1000)
+//     const index = mockOrders.findIndex((o) => o.id === id)
+//     if (index === -1) {
+//       throw new Error("Order not found")
+//     }
+//     mockOrders[index].status = status
+//     return mockOrders[index]
+//   },
+// }

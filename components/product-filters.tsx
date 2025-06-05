@@ -5,17 +5,17 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 
 interface ProductFiltersProps {
-  category: string
-  onCategoryChange: (category: string) => void
+  category: number | undefined
+  onCategoryChange: (category: number | undefined) => void
 }
 
 const categories = [
-  { value: "", label: "All Categories" },
-  { value: "Electronics", label: "Electronics" },
-  { value: "Sports", label: "Sports" },
-  { value: "Home", label: "Home" },
-  { value: "Fashion", label: "Fashion" },
-  { value: "Books", label: "Books" },
+  { id: undefined, label: "All Categories" },
+  { id: 1, label: "Electronics" },
+  { id: 2, label: "Sports" },
+  { id: 3, label: "Home" },
+  { id: 4, label: "Fashion" },
+  { id: 5, label: "Books" },
 ]
 
 export function ProductFilters({ category, onCategoryChange }: ProductFiltersProps) {
@@ -27,11 +27,11 @@ export function ProductFilters({ category, onCategoryChange }: ProductFiltersPro
       <CardContent className="space-y-6">
         <div>
           <h3 className="font-medium mb-3">Category</h3>
-          <RadioGroup value={category} onValueChange={onCategoryChange}>
+          <RadioGroup value={category?.toString() || ""} onValueChange={(value) => onCategoryChange(value ? Number(value) : undefined)}>
             {categories.map((cat) => (
-              <div key={cat.value} className="flex items-center space-x-2">
-                <RadioGroupItem value={cat.value} id={cat.value} />
-                <Label htmlFor={cat.value} className="text-sm">
+              <div key={cat.id?.toString() || "all"} className="flex items-center space-x-2">
+                <RadioGroupItem value={cat.id?.toString() || ""} id={cat.id?.toString() || "all"} />
+                <Label htmlFor={cat.id?.toString() || "all"} className="text-sm">
                   {cat.label}
                 </Label>
               </div>
