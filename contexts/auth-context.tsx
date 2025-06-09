@@ -2,7 +2,11 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
-import { authApi } from "@/lib/api"
+import { authApi, AUTH_TOKEN_KEY } from "@/lib/api"
+import { useToast } from "@/hooks/use-toast"
+
+// Token expiration time in milliseconds (30 minutes)
+const TOKEN_EXPIRATION_TIME = 30 * 60 * 1000;
 
 interface User {
   id: number
@@ -17,6 +21,7 @@ interface AuthContextType {
   logout: () => void
   isLoading: boolean
   isAuthenticated: boolean
+  tokenExpiryTime: number | null
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -24,30 +29,75 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [tokenExpiryTime, setTokenExpiryTime] = useState<number | null>(null)
   const router = useRouter()
+  const { toast } = useToast()
+
+  // Function to verify and set user from token
+  const verifyAndSetUser = async (token: string) => {
+    try {
+      const userData = await authApi.verifyToken(token)
+      setUser(userData)
+      // Set token expiry time to 30 minutes from now
+      setTokenExpiryTime(Date.now() + TOKEN_EXPIRATION_TIME)
+    } catch (error) {
+      console.error("Token verification failed:", error)
+      authApi.clearToken()
+      setUser(null)
+      setTokenExpiryTime(null)
+      throw error
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   useEffect(() => {
-    const token = localStorage.getItem("token")
+    const token = authApi.getStoredToken()
     if (token) {
-      // Verify token and get user info
-      authApi
-        .verifyToken(token)
-        .then((userData) => setUser(userData))
-        .catch(() => {
-          localStorage.removeItem("token")
+      verifyAndSetUser(token).catch(() => {
+        // Token verification failed, user will be logged out
+        toast({
+          title: "Session expired",
+          description: "Please login again to continue.",
+          variant: "destructive",
         })
-        .finally(() => setIsLoading(false))
+      })
     } else {
       setIsLoading(false)
     }
   }, [])
 
+  // Check token expiration periodically
+  useEffect(() => {
+    if (!tokenExpiryTime) return
+
+    const checkTokenExpiration = () => {
+      if (Date.now() >= tokenExpiryTime) {
+        // Token has expired
+        authApi.clearToken()
+        setUser(null)
+        setTokenExpiryTime(null)
+        toast({
+          title: "Session expired",
+          description: "Your session has expired. Please login again.",
+          variant: "destructive",
+        })
+        router.push("/login")
+      }
+    }
+
+    // Check every minute
+    const intervalId = setInterval(checkTokenExpiration, 60 * 1000)
+    return () => clearInterval(intervalId)
+  }, [tokenExpiryTime, router, toast])
+
   const login = async (email: string, password: string) => {
     try {
       const response = await authApi.login(email, password)
-      localStorage.setItem("token", response.access_token)
       setUser(response.user)
-
+      // Set token expiry time to 30 minutes from now
+      setTokenExpiryTime(Date.now() + TOKEN_EXPIRATION_TIME)
+      
       // Redirect based on admin status
       if (response.user.is_admin) {
         router.push("/admin")
@@ -55,13 +105,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         router.push("/dashboard")
       }
     } catch (error) {
+      // Clear any existing token on login failure
+      authApi.clearToken()
+      setUser(null)
+      setTokenExpiryTime(null)
       throw error
     }
   }
 
   const logout = () => {
-    localStorage.removeItem("token")
+    authApi.clearToken()
     setUser(null)
+    setTokenExpiryTime(null)
     router.push("/login")
   }
 
@@ -73,6 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         isLoading,
         isAuthenticated: !!user,
+        tokenExpiryTime,
       }}
     >
       {children}

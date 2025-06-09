@@ -7,7 +7,7 @@ import { ProtectedRoute } from "@/components/protected-route"
 import { Header } from "@/components/layout/header"
 import { useCart } from "@/contexts/cart-context"
 import { useAuth } from "@/contexts/auth-context"
-import { ordersApi } from "@/lib/api"
+import { ordersApi, paymentsApi, authApi } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -82,21 +82,116 @@ export default function CheckoutPage() {
     },
   })
 
-  const onSubmit = (data: CheckoutForm) => {
-    const order = {
-      userId: String(user?.id),
-      items: items.map((item) => ({
-        productId: item.id,
-        quantity: item.quantity,
-        price: item.price,
-      })),
-      total: totalPrice * 1.18, // Including 18% GST
-      status: "pending",
-      shippingAddress: `${data.address}, ${data.city}, ${data.state} ${data.zipCode}`,
-    }
+  const onSubmit = async (data: CheckoutForm) => {
+    try {
+      // Verify token is still valid before proceeding
+      const token = authApi.getStoredToken();
+      const tokenTimestamp = authApi.getTokenTimestamp();
+      
+      if (!token || !tokenTimestamp || Date.now() >= tokenTimestamp) {
+        toast({
+          title: "Session expired",
+          description: "Your session has expired. Please login again to complete your purchase.",
+          variant: "destructive",
+        });
+        router.push("/login");
+        return;
+      }
 
-    createOrderMutation.mutate(order)
-  }
+      // First create orders to get order IDs
+      const orderPromises = items.map(item => 
+        ordersApi.createOrder({
+          product_id: item.id.toString(),
+          quantity: item.quantity,
+          user_id: user?.id || 0
+        })
+      );
+
+      let orders;
+      try {
+        orders = await Promise.all(orderPromises);
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('Session expired')) {
+          toast({
+            title: "Session expired",
+            description: "Your session has expired while creating orders. Please login again to complete your purchase.",
+            variant: "destructive",
+          });
+          router.push("/login");
+          return;
+        }
+        throw error;
+      }
+
+      // Process payment for each order
+      const paymentPromises = orders.map(order => 
+        paymentsApi.createPayment({
+          order_id: order.id,
+          amount: items.find(item => item.id.toString() === order.product_id)!.price * order.quantity,
+          card_number: data.cardNumber.replace(/\s/g, ''), // Remove spaces from card number
+          card_holder_name: `${data.firstName} ${data.lastName}`,
+          expiry_date: data.expiryDate,
+          cvv: data.cvv
+        })
+      );
+
+      let payments;
+      try {
+        payments = await Promise.all(paymentPromises);
+      } catch (error) {
+        // If payment fails, we should handle the created orders
+        if (error instanceof Error && error.message.includes('Session expired')) {
+          toast({
+            title: "Session expired",
+            description: "Your session has expired while processing payment. Please login again to complete your purchase.",
+            variant: "destructive",
+          });
+          // TODO: Cancel created orders or mark them as failed
+          router.push("/login");
+          return;
+        }
+        throw error;
+      }
+
+      // Check if all payments were successful
+      const allPaymentsSuccessful = payments.every(payment => payment.status === 'successful');
+      
+      if (!allPaymentsSuccessful) {
+        // If any payment failed, we should handle it (e.g., cancel orders)
+        throw new Error('Some payments failed. Please try again.');
+      }
+
+      clearCart();
+      toast({
+        title: "Orders placed successfully!",
+        description: "Thank you for your purchase. You will receive a confirmation email shortly.",
+      });
+      router.push("/dashboard");
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message.includes('Session expired')) {
+          toast({
+            title: "Session expired",
+            description: "Your session has expired. Please login again to complete your purchase.",
+            variant: "destructive",
+          });
+          router.push("/login");
+        } else {
+          toast({
+            title: "Error processing order",
+            description: error.message,
+            variant: "destructive",
+          });
+        }
+      } else {
+        toast({
+          title: "Error processing order",
+          description: "Failed to process order. Please try again.",
+          variant: "destructive",
+        });
+      }
+    }
+  };
 
   return (
     <ProtectedRoute>
