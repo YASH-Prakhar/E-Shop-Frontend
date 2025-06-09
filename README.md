@@ -13,7 +13,7 @@ Follow these steps to get the project running on your local machine:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/[your-username]/E-Shop-Frontend.git
+git clone https://github.com/YASH-Prakhar/E-Shop-Frontend.git
 cd E-Shop-Frontend
 ```
 
